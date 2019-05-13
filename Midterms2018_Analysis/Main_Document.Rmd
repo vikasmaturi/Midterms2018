@@ -1,0 +1,38 @@
+---
+title: "Untitled"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data and Library Management
+
+## Libraries and Parameters
+```{r}
+library(tidyverse)
+library(readxl)
+
+context_file <- "~/CS109/election-context-2018.csv"
+
+georgia_file <- "~/CS109/Georgia.xlsx"
+
+florida_file <- "~/CS109/Florida.xlsx"
+
+ohio_file <- "~/CS109/Ohio.xlsx"
+```
+
+## Loading files
+```{r}
+context <- read_csv(context_file)
+georgia <- readxl::read_xlsx(georgia_file, sheet = 3, skip = 2)
+florida <- read_xlsx(florida_file)
+ohio <- read_excel(ohio_file, sheet = 4, skip = 4, col_names = FALSE)
+
+```
+
+
+
+
+
