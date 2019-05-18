@@ -57,7 +57,7 @@ ohio <- read_excel(ohio_file, sheet = 4, skip = 4, col_names = FALSE)
 
 ## Modified Data Set: Georgia-specific details
 ```{r}
-
+#
 #add columns that are modifications/combinations of previous columns for easier future use.
 georgia_fixed <-
   georgia %>% 

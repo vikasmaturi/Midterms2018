@@ -35,14 +35,14 @@ proactive engagement to encourage
 library(tidyverse)
 ```
 
-    ## ── Attaching packages ─────────────────────────────────────── tidyverse 1.2.1 ──
+    ## ── Attaching packages ──────────────────────────────────────────────────────────────────────────── tidyverse 1.2.1 ──
 
     ## ✔ ggplot2 3.1.1       ✔ purrr   0.3.2  
     ## ✔ tibble  2.1.1       ✔ dplyr   0.8.0.1
     ## ✔ tidyr   0.8.3       ✔ stringr 1.4.0  
     ## ✔ readr   1.3.1       ✔ forcats 0.4.0
 
-    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+    ## ── Conflicts ─────────────────────────────────────────────────────────────────────────────── tidyverse_conflicts() ──
     ## ✖ dplyr::filter() masks stats::filter()
     ## ✖ dplyr::lag()    masks stats::lag()
 
@@ -115,6 +115,7 @@ ohio <- read_excel(ohio_file, sheet = 4, skip = 4, col_names = FALSE)
 ## Modified Data Set: Georgia-specific details
 
 ``` r
+#
 #add columns that are modifications/combinations of previous columns for easier future use.
 georgia_fixed <-
   georgia %>% 
@@ -325,12 +326,12 @@ total_new_dem_voters
     ## # A tibble: 6 x 5
     ##   demographic num_converted num_reached     cost cost_per_conversion
     ##   <chr>               <dbl>       <int>    <dbl>               <dbl>
-    ## 1 black              130739      581906  9354308                71.5
-    ## 2 hsp                 92007      490856  7715408                83.9
-    ## 3 nwht               134517      597916  9642488                71.7
-    ## 4 foreign            146302      715074 11751332                80.3
-    ## 5 29u                224623     1128780 19198040                85.5
-    ## 6 nohs               259111     1476879 25463822                98.3
+    ## 1 black              186954      580249  9324482                49.9
+    ## 2 hsp                131519      489242  7686356                58.4
+    ## 3 nwht               192367      596233  9612194                50.0
+    ## 4 foreign            208968      712234 11700212                56.0
+    ## 5 29u                321761     1127367 19172606                59.6
+    ## 6 nohs               371275     1475645 25441610                68.5
 
 # Adding the models
 
@@ -349,7 +350,7 @@ total_votes_party_2020
     ## # A tibble: 1 x 2
     ##   estimated_dem_votes_total estimated_rep_votes_total
     ##                       <int>                     <int>
-    ## 1                   1881772                   2011175
+    ## 1                   1883624                   2008799
 
 ``` r
 #this is currently giving me variation within the scope of a few thousand votes; my sense is that voter turnout should have more variability than this. 
