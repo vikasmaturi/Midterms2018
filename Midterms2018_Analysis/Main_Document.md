@@ -110,6 +110,28 @@ ohio <- read_excel(ohio_file, sheet = 4, skip = 4, col_names = FALSE)
     ## * `` -> ...5
     ## * … and 48 more problems
 
+## County Data Management
+
+``` r
+#world <- ne_countries(scale = "medium", returnclass = "sf")
+
+states <- us_states(resolution = "high", states = "georgia") %>%
+  st_transform(crs = 4326)
+
+counties <- st_as_sf(map("county", plot = FALSE, fill = TRUE))
+counties <- 
+  subset(counties, grepl("georgia", counties$ID)) %>% 
+  separate(ID, into = c("state_name", "county"), sep = ",")
+counties$area <- as.numeric(st_area(counties))
+```
+
+## Constants for Visualizations
+
+``` r
+NYT_DEM <- "#1A80C4"
+NYT_REP <- "#CC3D41" 
+```
+
 # Wrangling Data
 
 ## Modified Data Set: Georgia-specific details
@@ -127,6 +149,7 @@ georgia_fixed <-
     vote_pct_2018 = total_2018 / total_population,
     abrams_pct = Abrams_Votes / total_2018,
     kemp_pct = Kemp_Votes / total_2018,
+    metz_pct = Metz_Votes / total_2018,
     total_2016 = trump16 + clinton16 + otherpres16,
     total_2012 = obama12 + romney12 + otherpres12,
     clinton_pct = clinton16 / total_2016,
@@ -143,36 +166,214 @@ georgia_fixed <-
   ) 
 ```
 
-# Central Model 1: Modeling the Voting Behavior of LIKELY VOTERS
+# Crafting a baseline estimate of the TRUE PERCENTAGE OF LIKELY DEMOCRATIC and REPUBLICAN VOTERS IN A COUNTY
 
 ## Model the true percentage of democratic voters and republican voters in the county
 
-``` r
-## Here, I use a Beta distribution to estimate the actual percentage of democratic and republican voters in the county. Beta is useful here because we have previous rates of success (the number of democratic  and republican voters in the 2012 and 2016 elections) which can be used as the prior betas. We then update our prior belief with vote counts from the 2018 election. I have elected to triple the weight of the 2018 election, given reports that Stacey Abram's strategies energized democratic voters to the extent that many have moved into the category of "likely voters". 
+Here, I use a Beta distribution to estimate the actual percentage of
+democratic and republican voters in the county. Beta is useful here
+because we have previous rates of success (the number of democratic and
+republican voters in the 2012 and 2016 elections) which can be used as
+the prior betas. We then update our prior belief with vote counts from
+the 2018 election. I have elected to triple the weight of the 2018
+election, given reports that Stacey Abram’s strategies energized
+democratic voters to the extent that many have moved into the category
+of “likely
+voters”.
 
+``` r
 #every time this runs, it generates a different value for the posterior because it is a random variable.
-county_party_model <-
-  georgia_fixed %>%
-  dplyr::select(county, starts_with("vote_pct"), Kemp_Votes, Abrams_Votes, total_population, ends_with("16"), ends_with("12"), ends_with("pct"), starts_with("total")) %>% 
+county_party_prop_model <- function(georgia_fixed){
+  county_party_model <-
+    georgia_fixed %>%
+    dplyr::select(county, starts_with("vote_pct"), Kemp_Votes, Abrams_Votes, total_population, ends_with("16"), ends_with("12"), ends_with("pct"), starts_with("total")) %>% 
+    mutate(
+      prior_dem_count = round(clinton16 * .5) + round(obama12 * .75),
+      prior_rep_b_count = round((trump16 + otherpres16) * .5) + round((romney12 + otherpres12) * .75),
+      prior_rep_count = round(trump16 * .5) + round(romney12 * .75),
+      prior_dem_b_count = round((clinton16 + otherpres16) * .5) + round((obama12 + otherpres12) * .75),
+    ) %>% 
+    mutate(
+      prior_dem = rbeta(n = num_counties, shape1 = prior_dem_count, shape2 = prior_rep_b_count), #setting n = num_counties, it runs the beta distribution for every row
+      prior_rep = rbeta(n = num_counties, shape1 = prior_rep_count, shape2 = prior_dem_b_count),
+      post_dem = rbeta(n = num_counties, shape1 = prior_dem_count + Abrams_Votes * 3, shape2 = prior_rep_b_count + Kemp_Votes * 3),
+      post_rep = rbeta(n = num_counties, shape1 = prior_rep_count + Kemp_Votes * 3 , shape2 = prior_dem_b_count + Abrams_Votes * 3 )
+      #estimated_dem_pct = rbeta(n = num_counties, shape1 = , sd = sd_dem_pct),
+      # estimated_rep_pct = rnorm(n = num_counties, mean = kemp_pct, sd = sd_rep_pct)
+      # equal_props_2016_dem = clinton_pct * total_population, 
+      # equal_props_2016_rep = total_population - equal_props_2016_dem,
+      # equal_props_2012_dem = obama_pct * total_population, 
+      # equal_props_2012_rep = total_population - equal_props_2012_dem,
+    ) %>% 
+    dplyr::select(starts_with("prior"), starts_with("post"), everything())
+  
+  return(county_party_model)
+}
+```
+
+## Model the actual NUMBER of likely democratic and republican voters in each county, based on the estimate of the true prop of democratic voters, true prop of republican voters, and voter turnout rate.
+
+This siumulates making an estimate of the actual numbers of democrats
+and republicans that will vote in an election. To do this, we use a
+binomial function. Our n for each county is the expected number of
+actual voters (multiplying the total population of the county by the
+expected voter turnout rate, rounded to the nearest integer). Our
+probability of success is our estimate of the true democratic rate. For
+now, we are still assuming that only LIKELY VOTERS are
+voting
+
+``` r
+#Utilizing the binomial function to make these estimations of county turnout by party, and the  end result
+
+estimate_likely_2020 <- function(county_party_model) {
+  estimated_likely_votes_2020 <- 
+    county_party_model %>% 
+    ## can add stuff here altering the probabilities within counties
+    mutate(
+      estimated_dem_votes = rnorm(num_counties, total_2018 * post_dem, sqrt(total_2018 * post_dem * (1 - post_dem)) ),
+      # Modeling the rep and dem votes separately does not take into account the fact that they are highly dependent on each other for any individual county.
+      estimated_rep_votes = total_2018 - estimated_dem_votes - round(metz_pct * total_2018),
+      #estimated_rep_votes = rnorm(num_counties, total_2018 * post_rep, sqrt(total_2018 * post_rep * (1 - post_rep)) * 50),
+      estimated_dem_votes_bin = rbinom(num_counties, total_2018, prob = post_dem),
+      estimated_rep_votes_bin = total_2018 - estimated_dem_votes_bin - round(metz_pct * total_2018),
+      #estimated_rep_votes_bin = rbinom(num_counties, total_2018, prob = post_rep)
+    ) %>% 
+    select(starts_with("estimate"), everything())
+  
+  return(estimated_likely_votes_2020)
+  
+}
+
+total_likely_model_2020 <- function(estimated_likely_votes_2020) {
+
+total_likely_votes_2020 <-
+  estimated_likely_votes_2020 %>% 
+  summarize(
+    estimated_dem_votes_total = sum(estimated_dem_votes), 
+    estimated_rep_votes_total = sum(estimated_rep_votes),
+    estimated_dem_total_bin = sum(estimated_dem_votes_bin),
+    estimated_rep_total_bin = sum(estimated_rep_votes_bin)
+  )
+
+return(total_likely_votes_2020)
+
+}
+```
+
+## Run a function to compile 1000 trials of estimated voter turnout by party by county if only LIKELY VOTERS were voting
+
+``` r
+trials_for_viz <- 10
+trials <- 1000
+
+several_likely_outcomes <- function(df) {
+  total_likely_model_2020(estimate_likely_2020(county_party_prop_model(df)))
+}
+
+vec_dfs <- rep(list(georgia_fixed), trials)
+
+test_results <-
+  map_dfr(vec_dfs, several_likely_outcomes) %>%
   mutate(
-    prior_dem_count = clinton16 + obama12,
-    prior_rep_b_count = trump16 + otherpres16 + romney12 + otherpres12,
-    prior_rep_count = trump16 + romney12,
-    prior_dem_b_count = clinton16 + otherpres16 + obama12 + otherpres12,
-  ) %>% 
+    did_dem_win = if_else(estimated_dem_votes_total > estimated_rep_votes_total, TRUE, FALSE),
+    did_dem_bin_win = if_else(estimated_dem_total_bin > estimated_rep_total_bin, TRUE, FALSE),
+  ) %>%
+  summarize_all(mean)
+
+test_results
+```
+
+    ## # A tibble: 1 x 6
+    ##   estimated_dem_v… estimated_rep_v… estimated_dem_t… estimated_rep_t…
+    ##              <dbl>            <dbl>            <dbl>            <dbl>
+    ## 1         1874461.         1992626.         1874508.         1992579.
+    ## # … with 2 more variables: did_dem_win <dbl>, did_dem_bin_win <dbl>
+
+## Visualization of five possible election maps if ONLY LIKELY VOTERS were voting
+
+``` r
+# vec_dfs_viz <- rep(list(georgia_fixed), trials_for_viz)
+# 
+# full_likely_outcomes <- function(df) {
+#   estimate_likely_2020(county_party_prop_model(df))
+# }
+# 
+
+test_result_df <- function(georgia_fixed) {
+test_results_viz <-
+  estimate_likely_2020(county_party_prop_model(georgia_fixed)) %>%
   mutate(
-    prior_dem = rbeta(n = num_counties, shape1 = prior_dem_count, shape2 = prior_rep_b_count), #setting n = num_counties, it runs the beta distribution for every row
-    prior_rep = rbeta(n = num_counties, shape1 = prior_rep_count, shape2 = prior_dem_b_count),
-    post_dem = rbeta(n = num_counties, shape1 = prior_dem_count + Abrams_Votes * 6, shape2 = prior_rep_b_count + Kemp_Votes * 6),
-    post_rep = rbeta(n = num_counties, shape1 = prior_rep_count + Kemp_Votes * 2, shape2 = prior_dem_b_count + Abrams_Votes * 2)
-    #estimated_dem_pct = rbeta(n = num_counties, shape1 = , sd = sd_dem_pct),
-    # estimated_rep_pct = rnorm(n = num_counties, mean = kemp_pct, sd = sd_rep_pct)
-    # equal_props_2016_dem = clinton_pct * total_population, 
-    # equal_props_2016_rep = total_population - equal_props_2016_dem,
-    # equal_props_2012_dem = obama_pct * total_population, 
-    # equal_props_2012_rep = total_population - equal_props_2012_dem,
-  ) %>% 
-  dplyr::select(starts_with("prior"), starts_with("post"), everything())
+    did_dem_win = if_else(estimated_dem_votes > estimated_rep_votes, TRUE, FALSE),
+    did_dem_bin_win = if_else(estimated_dem_votes_bin > estimated_rep_votes_bin, TRUE, FALSE),
+    prop_dem_win = estimated_dem_votes / (estimated_rep_votes +  estimated_dem_votes),
+    prop_rep_win = estimated_rep_votes / (estimated_rep_votes +  estimated_dem_votes)
+  ) %>%
+  left_join(counties, by = "county")
+
+return(test_results_viz)
+
+}
+
+plot_data <- function(georgia_fixed) {
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = test_result_df(georgia_fixed), color = gray(.75), aes(fill = prop_dem_win)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradient2(low = NYT_REP, high = NYT_DEM, mid = "white", midpoint = .5, space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill", limits = c(.05, .95)) +
+  labs(title = "Proportion of votes to the democratic candidate")
+  
+}
+
+plot_data(georgia_fixed)
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
+
+``` r
+plot_data(georgia_fixed)
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-9-2.png)<!-- -->
+
+``` r
+plot_data(georgia_fixed)
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-9-3.png)<!-- -->
+
+Without modification, these maps look nearly identical. In all of them,
+the republican wins. Assuming these are true representations of likely
+votes, this validates that Democrats have a significant task ahead in
+winning the Georgia election.
+
+In order to win this election, Democrats could adopt two strategies as
+previuosly discussed: 1. Changing the behavior of likely voters. This
+would be altering the actual proportion of democratic/republican voters
+in a given county. In order to do this, intensive county-wide efforts
+need to be conducted to change an individual’s
+vote.
+
+# Alteration 1: Changing the Behavior of LIKELY VOTERS
+
+## Changing Minds - Based on different county targeting strategies, we can alter percentages within counties
+
+``` r
+## for this example, let's assume that we specifically target the five highest prop-black counties in the state, conduct extensive  
+
+est_dem_increase <- .01
+
+altered_county_pcts_model <- function(county_party_model) {
+  altered_county_pcts <-
+    county_party_model %>% 
+    mutate(high_blk_pct = if_else(black_pct > high_blk_cutoff, TRUE, FALSE)) %>% 
+    mutate(
+      adjusted_dem_pct = if_else(high_blk_pct, avg_dem_pct + .01, avg_dem_pct),
+      adjusted_rep_pct = if_else(high_blk_pct, avg_rep_pct - .01, avg_rep_pct)
+    )
+  return(altered_county_pcts)
+}
 ```
 
 ## Model the voter turnout rate for each county in the upcoming election
@@ -199,22 +400,6 @@ county_party_model <-
 #     dplyr::select(starts_with("prior"), starts_with("post"), everything())
 ```
 
-## Model the actual number of likely democratic and republican voters in each county, based on the estimate of the true prop of democratic voters, true prop of republican voters, and voter turnout rate.
-
-``` r
-#This siumulates making an estimate of the actual numbers of democrats and republicans that will actually vote in an election. To do this, we use a binomial function. Our n for each county is the expected number of actual voters (multiplying the total population of the county by the expected voter turnout rate, rounded to the nearest integer). Our probability of success is our estimate of the true democratic rate.
-
-
-estimated_likely_votes_2020 <-
-  county_party_model %>% 
-  ## can add stuff here altering the probabilities within counties
-  mutate(
-    estimated_dem_votes = rbinom(num_counties, total_2018, prob = post_dem),
-    estimated_rep_votes = rbinom(num_counties, total_2018, prob = post_rep)
-  ) %>% 
-  select(starts_with("estimate"), everything())
-```
-
 # Central Model 2: Bringing in NEW VOTERS
 
 ## Reaching new voters
@@ -224,35 +409,34 @@ estimated_likely_votes_2020 <-
 
 
 # these are percentage constants. If a county has more than this percentage of stated category, it will be included in the models that refer to it.
-high_blk_cutoff <- 50 # engage in voter outreach efforts in counties that are majority black
-high_hsp_cutoff <- 15
+high_blk_cutoff <- 45 # engage in voter outreach efforts in counties that are majority black
+high_hsp_cutoff <- 11
 high_nwht_cutoff <- 60
-high_foreign_cutoff <- 16 
-high_29u_cutoff <- 43
-high_nohs_cutoff <- 15
-
-cost_pp <- 80 #cost to speak to one user
-
+high_foreign_cutoff <- 15
+high_29u_cutoff <- 44
+high_nohs_cutoff <- 20
+high_abs_cutoff <- .70
 #estimated parameters of the model for the conversion rate (a conditional probability)
-mean_conversion_rate <- .3
-sd_conversion_rate <- .05
-
-#conversion rate is the conditional probability, given that a potential new voter you find is open to voting democratic, will actually vote democratic in the election (your efficacy of ) 
-conversion_rate <- max(rnorm(1, mean_conversion_rate, sd_conversion_rate), .2) 
+base_conv <- .3
+# 
+# #conversion rate is the conditional probability, given that a potential new voter you find is open to voting democratic, will actually vote democratic in the election (your efficacy of ) 
+# conversion_rate <- max(rnorm(1, mean_conversion_rate, sd_conversion_rate), .2) 
 ideal_new_reach_pct <- .6 # percentage of unreached voters you would like to talk to in your selected counties
 
 #function to calculate cost of reaching the number of people reached under a specific outreach strategy. 
-cost_of_outreach <- function(number_reached) {
-  c1 = 5 # cost per person of reaching 1-10000 person in a campaign
-  c2 = 7 # cost per person of reaching 10001-50000 person in a campaign
+cost_of_outreach <- function(number_reached, num_counties_reached) {
+  c1 = 8 # cost per person of reaching 1-10000 person in a campaign
+  c2 = 6 # cost per person of reaching 10001-50000 person in a campaign
   c3 = 11 # cost per person of reaching 50001-100000 person in a campaign
-  c4 = 16 # cost per person of reaching 1000001 or more
+  c4 = 15 # cost per person of reaching 1000001 or more
   if (number_reached < 10001) {
-    return(number_reached * c1)
-  } else if (number_reached < 50001) {
-    return(10000 * c1 + (number_reached - 10000) * c2)
+    return(number_reached * c1 + 60000 * num_counties_reached)
+  } else if (number_reached < 30001) {
+    return(10000 * c1 + (number_reached - 10000) * c2 + 60000 * num_counties_reached)
+  } else if (number_reached < 600001) {
+    return(10000 * c1 + (20000) * c2 + (number_reached - 30000) * c3  + 60000 * num_counties_reached)
   } else {
-    return(10000 * c1 + (number_reached - 10000) * c2 + (number_reached - 100000) * c3)
+    return(10000 * c1 + 20000 * c2 + 30000 * c3 + (number_reached - 60000) * c4 + 60000 * num_counties_reached)
   }
 }
 
@@ -261,30 +445,48 @@ new_voters_added <-
   georgia_fixed %>% 
   mutate(
     unreached_pct = (total_population - total_2018) / total_population,
-    likelihood_interest = abrams_pct + (1 - abrams_pct) * .5,
+    
+    # Utilizing the proportion of democratic voters, we obtain a rough estimate of the percentage of voters that may be open to a message from the democratic party. 
+    likelihood_interest = abrams_pct + (1 - abrams_pct) * .3,
+    
+    # we consider non-voters in 2018 to be unlikely voters as a simplifying assumption.
     unreached = total_population - total_2018,
-    # we model the number of people that you are actually able to reach when canvassing as a binomial - sometimes you will reach mroe families than expected, sometimes less; it depends.
+    
+    #we calculate the estimated conversion rate by considering factors that influence an individuals ability to vote. For example, we believe even if you convince an unemployed person of your politics, they may not have the resources to vote. Thus we account for these limiting factors in 
+    conversion_rate = base_conv * sqrt(median_hh_inc / mean(median_hh_inc)) * sqrt(mean(foreignborn_pct) / foreignborn_pct) * sqrt(mean(clf_unemploy_pct) / clf_unemploy_pct) * sqrt(mean(age29andunder_pct) / age29andunder_pct),
+    
+    # we model the number of people that you are actually able to reach when canvassing as a binomial for a given district (though this may be an unnecessary model)
     number_reached = rbinom(num_counties, unreached, prob = ideal_new_reach_pct), 
     high_blk_pct = if_else(black_pct > high_blk_cutoff, TRUE, FALSE),
     high_hsp_pct = if_else(hispanic_pct > high_hsp_cutoff, TRUE, FALSE),
     high_nwht_pct = if_else(nonwhite_pct > high_nwht_cutoff, TRUE, FALSE),
     high_foreign_pct = if_else(foreignborn_pct > high_foreign_cutoff, TRUE, FALSE),
     high_29u_pct = if_else(age29andunder_pct > high_29u_cutoff, TRUE, FALSE),
-    high_nohs_pct = if_else(lesshs_pct > high_nohs_cutoff, TRUE, FALSE)
+    high_nohs_pct = if_else(lesshs_pct > high_nohs_cutoff, TRUE, FALSE),
+    high_abs_pct = if_else(abrams_pct > high_abs_cutoff, TRUE, FALSE)
   ) %>% 
   mutate(
     new_black = if_else(high_blk_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
     reached_black = if_else(high_blk_pct, number_reached, 0L),
+    count_black = if_else(high_blk_pct, 1, 0),
     new_hsp = if_else(high_hsp_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
     reached_hsp = if_else(high_hsp_pct, number_reached , 0L),
+    count_hsp = if_else(high_hsp_pct, 1, 0),
     new_nwht = if_else(high_nwht_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
     reached_nwht = if_else(high_nwht_pct, number_reached , 0L),
+    count_nwht = if_else(high_nwht_pct, 1, 0),
     new_foreign = if_else(high_foreign_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
-    reached_foreign = if_else(high_foreign_pct, number_reached, 0L),
+    reached_foreign = if_else(high_foreign_pct, number_reached, 0L), 
+    count_foreign = if_else(high_foreign_pct, 1, 0),
     new_29u = if_else(high_29u_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
     reached_29u = if_else(high_29u_pct, number_reached, 0L),
+    count_29u = if_else(high_29u_pct, 1, 0),
     new_nohs = if_else(high_nohs_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
     reached_nohs = if_else(high_nohs_pct, number_reached, 0L),
+    count_nohs = if_else(high_nohs_pct, 1, 0),
+    new_abs = if_else(high_abs_pct, round(number_reached * likelihood_interest  * conversion_rate), 0),
+    reached_abs = if_else(high_abs_pct, number_reached, 0L),
+    count_abs = if_else(high_abs_pct, 1, 0),
   ) %>% 
   select(starts_with("new"), starts_with("reached"), starts_with("high"), number_reached,  everything())
 ```
@@ -298,6 +500,13 @@ total_reached_group <-
   dplyr::select(-remove_this)
   
 
+counties_reached_group <-
+  new_voters_added %>% 
+  summarise_at(vars(starts_with("count_")), sum) %>% 
+  gather(key = "temp_name2", value = "num_counties_reached") %>% 
+  separate(temp_name2, into = c("remove_this", "demographic")) %>% 
+  dplyr::select(-remove_this)
+
   
 
 total_new_dem_voters <-
@@ -307,8 +516,9 @@ total_new_dem_voters <-
   separate(temp_name, into = c("remove_this", "demographic")) %>%
   dplyr::select(-remove_this) %>% 
   left_join(total_reached_group, by = "demographic") %>% 
+  left_join(counties_reached_group, by = "demographic") %>%
   mutate(
-    cost = cost_of_outreach(num_reached),
+    cost = cost_of_outreach(num_reached, num_counties_reached),
     cost_per_conversion = cost/num_converted
   )
 ```
@@ -316,43 +526,146 @@ total_new_dem_voters <-
     ## Warning in if (number_reached < 10001) {: the condition has length > 1 and
     ## only the first element will be used
 
-    ## Warning in if (number_reached < 50001) {: the condition has length > 1 and
+    ## Warning in if (number_reached < 30001) {: the condition has length > 1 and
+    ## only the first element will be used
+
+    ## Warning in if (number_reached < 600001) {: the condition has length > 1 and
     ## only the first element will be used
 
 ``` r
 total_new_dem_voters
 ```
 
-    ## # A tibble: 6 x 5
-    ##   demographic num_converted num_reached     cost cost_per_conversion
-    ##   <chr>               <dbl>       <int>    <dbl>               <dbl>
-    ## 1 black              186954      580249  9324482                49.9
-    ## 2 hsp                131519      489242  7686356                58.4
-    ## 3 nwht               192367      596233  9612194                50.0
-    ## 4 foreign            208968      712234 11700212                56.0
-    ## 5 29u                321761     1127367 19172606                59.6
-    ## 6 nohs               371275     1475645 25441610                68.5
+    ## # A tibble: 7 x 6
+    ##   demographic num_converted num_reached num_counties_re…   cost
+    ##   <chr>               <dbl>       <int>            <dbl>  <dbl>
+    ## 1 black              109938      639662               25 1.07e7
+    ## 2 hsp                129631     1035735               23 1.65e7
+    ## 3 nwht                99509      597163               17 9.61e6
+    ## 4 foreign            129270      964558                6 1.45e7
+    ## 5 29u                 92301      570684               14 9.03e6
+    ## 6 nohs               109475      656213               72 1.38e7
+    ## 7 abs                116426      754424                5 1.12e7
+    ## # … with 1 more variable: cost_per_conversion <dbl>
+
+From this theoretical model, we see that theere are many ways of
+targeting the required number of individuals. Interestingly, by simply
+using demographic data, we see how working in counties where high
+populations of black voters are - populations which have been
+historically disenfrancished - we have identified important counties of
+voter reach intervention that will benefit Democrats.
+
+## Visualizing where new voters were added
+
+``` r
+##Make a map of "likelihood of conversion" for black, abrams, nohs"
+
+##MAKE THIS TO BE THE AVERAGE ACROSS DATA POINTS!
+
+## graph for targeting of high black-population counties
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = new_voters_added %>% left_join(counties, by = "county"), color = gray(.75), aes(fill = new_black)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradient2(low = "white", high = "darkorange3", space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill") +
+  labs(title = "Extent of new voters by county (targeting high-black population counties)")
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
+
+``` r
+## graph for targeting of high hispanic counties
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = new_voters_added %>% left_join(counties, by = "county"), color = gray(.75), aes(fill = new_hsp)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradient2(low = "white", high = "darkorange3", space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill") +
+  labs(title = "Extent of new voters by county (targeting high-hsp population counties)")
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-14-2.png)<!-- -->
+
+``` r
+## graph for targeting of high nonwhite-population counties
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = new_voters_added %>% left_join(counties, by = "county"), color = gray(.75), aes(fill = new_nwht)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradient2(low = "white", high = "darkorange3", space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill") +
+  labs(title = "Extent of new voters by county (targeting high-nonwhite population counties)")
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-14-3.png)<!-- -->
+
+``` r
+## graph for targeting of high foreign born-population counties
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = new_voters_added %>% left_join(counties, by = "county"), color = gray(.75), aes(fill = new_foreign)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradient2(low = "white", high = "darkorange3", space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill") +
+  labs(title = "Extent of new voters by county (targeting high-foreign population counties)")
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-14-4.png)<!-- -->
+
+``` r
+## graph for targeting of high no high school-population counties
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = new_voters_added %>% left_join(counties, by = "county"), color = gray(.75), aes(fill = new_nohs)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradient2(low = "white", high = "darkorange3", space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill") +
+  labs(title = "Extent of new voters by county (targeting high- no-high school population counties)")
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-14-5.png)<!-- -->
+
+``` r
+## graph for targeting of high abrams-voter-percentage counties
+ggplot(data = states) +
+  geom_sf() +
+  geom_sf(data = new_voters_added %>% left_join(counties, by = "county"), color = gray(.75), aes(fill = new_abs)) +
+  coord_sf(xlim = c(-88, -78), ylim = c(30, 36), expand = FALSE) + 
+  theme_light() + 
+  scale_fill_gradientn(colors = c("white", "darkorange", "darkorange3"), space = "Lab",
+                       na.value = "grey50", guide = "colourbar", aesthetics = "fill") +
+  labs(title = "Extent of new voters by county (targeting high-abrams-proportion population counties)")
+```
+
+![](Main_Document_files/figure-gfm/unnamed-chunk-14-6.png)<!-- -->
+
+More than anything, this model demonstrates that there are several
+potential strategies to
 
 # Adding the models
 
-``` r
-## this sums the estimated number of dem and rep votes for each county to make an estimate of the total dem and rep votes in georgia.
-total_votes_party_2020 <-
-  estimated_likely_votes_2020 %>% 
-  summarize(
-    estimated_dem_votes_total = sum(estimated_dem_votes), 
-    estimated_rep_votes_total = sum(estimated_rep_votes),
-  )
-
-total_votes_party_2020
-```
-
-    ## # A tibble: 1 x 2
-    ##   estimated_dem_votes_total estimated_rep_votes_total
-    ##                       <int>                     <int>
-    ## 1                   1883624                   2008799
+Given our estimated costs, lets imagine that the 2020 candidate campaign
+has an estimated 12 million dollars available on-hand
+o
 
 ``` r
+# ## this sums the estimated number of dem and rep votes for each county to make an estimate of the total dem and rep votes in georgia.
+# total_votes_party_2020 <-
+#   estimated_likely_votes_2020 %>% 
+#   summarize(
+#     estimated_dem_votes_total = sum(estimated_dem_votes), 
+#     estimated_rep_votes_total = sum(estimated_rep_votes),
+#   )
+# 
+# total_votes_party_2020
+# 
+
 #this is currently giving me variation within the scope of a few thousand votes; my sense is that voter turnout should have more variability than this. 
 ```
 
@@ -360,18 +673,12 @@ total_votes_party_2020
 
 ## Alter the initial dem/rep percentages according to different voter interventions designed in different ways (eg generic “get out the vote”, targeting increase in specific counties/communities)
 
+## Plotting Datasets
+
 ``` r
-## for this example, let's assume that we specifically target the five highest prop-black counties in the state, conduct extensive  
-
-est_dem_increase <- .01
-
-altered_county_pcts <-
+georgia_plots <-
   georgia_fixed %>% 
-  mutate(high_blk_pct = if_else(black_pct > high_blk_cutoff, TRUE, FALSE)) %>% 
-  mutate(
-    adjusted_dem_pct = if_else(high_blk_pct, avg_dem_pct + .01, avg_dem_pct),
-    adjusted_rep_pct = if_else(high_blk_pct, avg_rep_pct - .01, avg_rep_pct)
-  )
+  left_join(counties, by = "county")
 ```
 
 # Other General Data Analysis
@@ -440,37 +747,7 @@ georgia_fixed %>%
     ## # … with 2 more variables: equal_props_2012_dem_total <dbl>,
     ## #   equal_props_2012_rep_total <dbl>
 
-## County Data Management
-
-``` r
-#world <- ne_countries(scale = "medium", returnclass = "sf")
-
-states <- us_states(resolution = "high", states = "georgia") %>%
-  st_transform(crs = 4326)
-
-counties <- st_as_sf(map("county", plot = FALSE, fill = TRUE))
-counties <- 
-  subset(counties, grepl("georgia", counties$ID)) %>% 
-  separate(ID, into = c("state_name", "county"), sep = ",")
-counties$area <- as.numeric(st_area(counties))
-```
-
-## Plotting Datasets
-
-``` r
-georgia_plots <-
-  georgia_fixed %>% 
-  left_join(counties, by = "county")
-```
-
 # Visualizations
-
-## Constants for Visualizations
-
-``` r
-NYT_DEM <- "#1A80C4"
-NYT_REP <- "#CC3D41" 
-```
 
 ## Abrams Relative Increase in Percentage of Vote by County
 
@@ -485,7 +762,7 @@ ggplot(data = states) +
   labs(title = "Abrams relative gain over Clinton in proportion of votes won")
 ```
 
-![](Main_Document_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
+![](Main_Document_files/figure-gfm/unnamed-chunk-19-1.png)<!-- -->
 
 ## Clinton Percentage of Vote by County
 
@@ -500,7 +777,7 @@ ggplot(data = states) +
   labs(title = "Clinton Percentage")
 ```
 
-![](Main_Document_files/figure-gfm/unnamed-chunk-17-1.png)<!-- -->
+![](Main_Document_files/figure-gfm/unnamed-chunk-20-1.png)<!-- -->
 
 ## 
 
@@ -515,4 +792,4 @@ ggplot(data = states) +
   labs(title = "Voter Turnout 2018")
 ```
 
-![](Main_Document_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
+![](Main_Document_files/figure-gfm/unnamed-chunk-21-1.png)<!-- -->
