@@ -47,14 +47,14 @@ distributions (Beta, binomial, normal) and conditional probability. I
 also developed several algorithms utilized to obtain the appropriate
 inputs to the model.
 
-Ultimately, my goal with this assignment was to create a practical tool
+Ultimately, my goal was to develop the outline of a practical tool
 that can be used for political campaigns to identify approaches of
 reaching more voters using publically available data. I believe it has
 further potential implications in identifying areas of voter
 disenfranchisement.
 
 All data was used with permission from the 2018 MIT Election Data and
-Science Lab (publically available on
+Science Lab (publicly available on
     GitHub)
 
 # Data and Library Management
