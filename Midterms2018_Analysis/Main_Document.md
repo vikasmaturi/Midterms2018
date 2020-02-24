@@ -30,10 +30,8 @@ voted. By changing the minds of voters who are expected to vote with
 those of the other party, or have not quite made up their mind, one can
 massively improve their outcome.
 
-For this assignment, I will be *only be exploring the “new voter”
-approach.*
-
-With this assignment, my goal is to **create a template model for voter
+I will be *only be exploring the “new voter”
+approach.* My goal is to **create a template model for voter
 turnout** under the “new voter” approach, and **visualize the
 implications of these models**. In particular, I study how a campaign
 can rely upon *historical election data* and *demographic data* alone to
