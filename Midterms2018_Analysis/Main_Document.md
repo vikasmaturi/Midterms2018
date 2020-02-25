@@ -1,7 +1,7 @@
 2018 Midterms Analysis
 ================
 
-Vikas Maturi CS 109 Project Assignment
+Vikas Maturi
 
 # Analyzing 2020 Campaign Strategy in Georgia
 
